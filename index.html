@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>카카오맵 장소 검색 서비스</title>
+  
+  <!-- CSS 스타일 정의 -->
+  <style>
+    /* 여백 초기화 및 기본 폰트 설정 */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    /* 전체 화면을 좌우 2분할 레이아웃으로 설정 */
+    .container {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* 왼쪽 패널: 검색창 및 결과 리스트 영역 */
+    .sidebar {
+      width: 380px;
+      height: 100%;
+      background-color: #ffffff;
+      border-right: 1px solid #e1e4e8;
+      display: flex;
+      flex-direction: column;
+      z-index: 10;
+      box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+    }
+
+    /* 사이드바 헤더 (제목 및 검색 폼) */
+    .sidebar-header {
+      padding: 20px;
+      background-color: #f8f9fa;
+      border-bottom: 1px solid #e1e4e8;
+    }
+
+    .sidebar-header h2 {
+      font-size: 1.25rem;
+      color: #333;
+      margin-bottom: 12px;
+    }
+
+    /* 검색창 박스 */
+    .search-box {
+      display: flex;
+      gap: 8px;
+    }
+
+    .search-input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid #cccccc;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: #fee500; /* 카카오 대표 노란색 모티브 */
+    }
+
+    .search-button {
+      padding: 10px 16px;
+      background-color: #fee500;
+      color: #000000;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .search-button:hover {
+      background-color: #fada00;
+    }
+
+    /* 검색 결과 리스트 영역 */
+    .result-list {
+      flex: 1;
+      overflow-y: auto;
+      list-style: none;
+    }
+
+    .result-item {
+      padding: 16px;
+      border-bottom: 1px solid #f0f0f0;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .result-item:hover {
+      background-color: #f8f9fa;
+    }
+
+    .result-item .place-name {
+      font-weight: bold;
+      font-size: 1rem;
+      color: #111;
+      margin-bottom: 4px;
+    }
+
+    .result-item .address {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 2px;
+    }
+
+    .result-item .phone {
+      font-size: 0.8rem;
+      color: #09b685;
+    }
+
+    /* 오른쪽 지도 영역 */
+    .map-container {
+      flex: 1;
+      height: 100%;
+      position: relative;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* 안내 메시지 / 검색 결과 없음 레이아웃 */
+    .empty-result {
+      padding: 40px 20px;
+      text-align: center;
+      color: #888;
+      font-size: 0.9rem;
+    }
+  </style>
+
+  <!-- 카카오맵 JavaScript API 로드 (autoload=false 파라미터를 추가하여 완전 로드 후 초기화하도록 함) -->
+  <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=c1ed2b09612e7b183c0f43c7d5240782&libraries=services&autoload=false"></script>
+</head>
+<body>
+
+  <div class="container">
+    <!-- 왼쪽: 검색 및 결과 영역 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>장소 검색</h2>
+        <form id="searchForm" class="search-box" onsubmit="handleSearch(event)">
+          <input type="text" id="keywordInput" class="search-input" placeholder="장소를 입력하세요 (예: 강남역 카페)" required>
+          <button type="submit" class="search-button">검색</button>
+        </form>
+      </div>
+
+      <!-- 검색 결과 목록 -->
+      <ul id="resultList" class="result-list">
+        <li class="empty-result">검색어를 입력하고 검색 버튼을 누르세요.</li>
+      </ul>
+    </aside>
+
+    <!-- 오른쪽: 지도 표시 영역 -->
+    <main class="map-container">
+      <div id="map"></div>
+    </main>
+  </div>
+
+  <!-- JavaScript 코드 -->
+  <script>
+    // 전역 변수 선언
+    let map = null;               // 지도 객체
+    let placesService = null;     // 장소 검색 서비스 객체
+    let infoWindow = null;        // 마커 클릭 시 나타날 인포윈도우
+    let currentMarkers = [];      // 검색 결과로 만들어진 마커들을 보관하는 배열
+
+    // 페이지 로드가 완료되면 SDK 로드 확인 후 지도 초기화 실행
+    window.addEventListener('DOMContentLoaded', () => {
+      // kakao.maps.load를 사용하여 SDK가 완전히 로드된 후 내부 로직 실행 (로딩 오류 방지)
+      kakao.maps.load(() => {
+        initMap();
+      });
+    });
+
+    /**
+     * 지도 및 서비스 초기화 함수
+     */
+    function initMap() {
+      const mapContainer = document.getElementById('map');
+      
+      // 기본 중심 좌표 (위치 권한을 거부하거나 오류 발생 시 표시할 서울시청 좌표)
+      const defaultCenter = new kakao.maps.LatLng(37.566826, 126.978656);
+      
+      const mapOptions = {
+        center: defaultCenter, // 중심 좌표
+        level: 5               // 요구사항: 지도 확대 레벨 5
+      };
+
+      // 지도 생성
+      map = new kakao.maps.Map(mapContainer, mapOptions);
+
+      // 장소 검색 서비스 및 인포윈도우 객체 생성
+      placesService = new kakao.maps.services.Places();
+      infoWindow = new kakao.maps.InfoWindow({ zIndex: 1 });
+
+      // 브라우저의 Geolocation API를 사용하여 현재 위치 가져오기
+      getCurrentLocation();
+    }
+
+    /**
+     * 사용자의 현재 위치를 받아와 지도의 중심으로 설정하는 함수
+     */
+    function getCurrentLocation() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const currentLat = position.coords.latitude;  // 위도
+            const currentLng = position.coords.longitude; // 경도
+            const currentPosition = new kakao.maps.LatLng(currentLat, currentLng);
+
+            // 현재 위치로 지도 중심 이동
+            map.setCenter(currentPosition);
+
+            // 현재 위치를 알리는 마커 및 인포윈도우 표시
+            const currentMarker = new kakao.maps.Marker({
+              map: map,
+              position: currentPosition
+            });
+
+            const currentInfoWindow = new kakao.maps.InfoWindow({
+              content: '<div style="padding:5px;font-size:12px;">현재 위치</div>'
+            });
+            currentInfoWindow.open(map, currentMarker);
+          },
+          (error) => {
+            console.warn('위치 권한을 불러올 수 없습니다. 기본 위치로 설정합니다.', error);
+          }
+        );
+      } else {
+        console.warn('이 브라우저는 Geolocation을 지원하지 않습니다.');
+      }
+    }
+
+    /**
+     * 검색 버튼 또는 Enter 키 입력 시 실행되는 이벤트 핸들러
+     */
+    function handleSearch(event) {
+      event.preventDefault(); // 폼 제출 시 페이지가 새로고침되는 현상 방지
+
+      const keyword = document.getElementById('keywordInput').value.trim();
+
+      if (!keyword) {
+        alert('검색어를 입력해 주세요!');
+        return;
+      }
+
+      // 카카오 키워드 검색 API 호출
+      placesService.keywordSearch(keyword, placesSearchCallback);
+    }
+
+    /**
+     * 카카오 키워드 검색 결과를 처리하는 콜백 함수
+     */
+    function placesSearchCallback(data, status, pagination) {
+      if (status === kakao.maps.services.Status.OK) {
+        // 검색 결과가 성공적으로 돌아왔을 때
+        displaySearchResults(data);
+      } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+        alert('검색 결과가 존재하지 않습니다.');
+        clearSearchResults();
+      } else if (status === kakao.maps.services.Status.ERROR) {
+        alert('검색 중 오류가 발생했습니다.');
+        clearSearchResults();
+      }
+    }
+
+    /**
+     * 검색 결과를 화면(목록 & 지도 마커)에 표시하는 함수
+     */
+    function displaySearchResults(places) {
+      const listContainer = document.getElementById('resultList');
+      
+      // 기존 결과 목록 및 마커 제거
+      clearSearchResults();
+
+      const bounds = new kakao.maps.LatLngBounds();
+
+      places.forEach((place, index) => {
+        // 장소의 위치 좌표 생성
+        const placePosition = new kakao.maps.LatLng(place.y, place.x);
+
+        // 지도상에 마커 생성 및 표시
+        const marker = new kakao.maps.Marker({
+          position: placePosition,
+          map: map
+        });
+
+        // 생성한 마커를 배열에 저장
+        currentMarkers.push(marker);
+
+        // 검색 영역 범위를 넓히기 위해 좌표 등록
+        bounds.extend(placePosition);
+
+        // 사이드바에 추가할 결과 아이템 엘리먼트 생성
+        const listItem = document.createElement('li');
+        listItem.className = 'result-item';
+        listItem.innerHTML = `
+          <div class="place-name">${index + 1}. ${place.place_name}</div>
+          <div class="address">${place.road_address_name || place.address_name}</div>
+          ${place.phone ? `<div class="phone">${place.phone}</div>` : ''}
+        `;
+
+        // 마커 및 결과 목록 클릭 이벤트 처리
+        const showInfo = () => {
+          infoWindow.setContent(`<div style="padding:8px;font-size:12px;font-weight:bold;">${place.place_name}</div>`);
+          infoWindow.open(map, marker);
+          map.panTo(placePosition);
+        };
+
+        marker.addListener('click', showInfo);
+        listItem.addEventListener('click', showInfo);
+
+        listContainer.appendChild(listItem);
+      });
+
+      // 검색된 모든 장소가 한눈에 들어오도록 지도의 범위를 재설정
+      map.setBounds(bounds);
+    }
+
+    /**
+     * 기존 마커 및 목록을 초기화하는 함수
+     */
+    function clearSearchResults() {
+      // 화면의 마커 모두 제거
+      currentMarkers.forEach((marker) => marker.setMap(null));
+      currentMarkers = [];
+
+      // 검색 결과 리스트 초기화
+      const listContainer = document.getElementById('resultList');
+      listContainer.innerHTML = '';
+
+      // 열려있는 인포윈도우 닫기
+      if (infoWindow) {
+        infoWindow.close();
+      }
+    }
+  </script>
+
+</body>
+</html>
